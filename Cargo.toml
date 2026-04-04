@@ -2,6 +2,8 @@
 name = "ninede-pimbo"
 version = "0.1.0"
 edition = "2024"
+description = "An inventory management app/api, made for personal use"
+license = "MIT"
 
 [dependencies]
 axum = { version = "0.8.8", features = ["json"] }
