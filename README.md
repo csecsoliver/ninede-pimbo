@@ -1,16 +1,21 @@
 # ninede-pimbo (9-e.cc personal inventory management by olio)
 
 ## endpoints
-Routes starting with api are the json endpoints, ones not are html or plain text endpoints
-1. /api/item (post)  
-An endpoint to 
-2. /api/item/{id} (get)  
-3. /api/items (get)  
+Routes starting with api are the json endpoints, ones not are html, plain text or form endpoints
+1. /api/items (post) (auth)  
+Create an item
+2. /api/items/{id} (get) (auth)
+Get info about an item
+3. /api/items/{id} (patch) (auth)
+modify an item
+4. /api/items/{id} (delete) (auth)
+3. /api/items (get) (auth)  
 4. /#{id} (get)  
-5. /login (get)  
-6. /login (post)  
-6. /dash (get)  
-8. /search (get)  
+5. /#{id}/seen (post)
+5. /login (get) (not implemented)  
+6. /login (post) (not implemented)  
+6. /dash (get) (not implemented)  
+8. /search?q={query} (get) (auth)  
 7. / (get)  
 
 ## DB tables
@@ -21,7 +26,8 @@ An endpoint to
 ### accesskeys (this is the current way to authenticate)
 1. id (SERIAL, PRIMARY KEY)
 2. user_id (INTEGER NOT NULL)
-2. key (TEXT NOT NULL)
+2. keytext (TEXT NOT NULL)
+3. expiry (TIMESTAMPZ)
 CONSTRAINT fk_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ### items (actual stuff)
 1. id (SERIAL, PRIMARY KEY)
