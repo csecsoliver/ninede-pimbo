@@ -272,7 +272,7 @@ async fn main() {
         .route("/api/items/{id}", delete(delete_item))
         .route("/api/items", get(list_items))
         .route("/_{id}", get(scanned_item))
-        .route("/#{id}/seen", post(mark_item_seen))
+        .route("/_{id}/seen", post(mark_item_seen))
         // .route("/search", get(search_item))
         .with_state(state);
 
