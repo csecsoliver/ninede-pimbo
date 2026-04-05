@@ -63,39 +63,35 @@ struct Accesskey {
     expiry: Option<chrono::DateTime<Local>>,
 }
 
-fn check_auth(headers: &HeaderMap, api_key: &str) -> Result<(), (StatusCode, Json<ApiResponse>)> {
-    let provided = headers
-        .get("x-api-key")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
+// fn check_auth(headers: &HeaderMap, api_key: &str) -> Result<(), (StatusCode, Json<ApiResponse>)> {
+//     let provided = headers
+//         .get("x-api-key")
+//         .and_then(|v| v.to_str().ok())
+//         .unwrap_or("");
 
-    if provided != api_key {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(ApiResponse {
-                message: "invalid or missing API key".to_string(),
-            }),
-        ));
-    }
+//     if provided != api_key {
+//         return Err((
+//             StatusCode::UNAUTHORIZED,
+//             Json(ApiResponse {
+//                 message: "invalid or missing API key".to_string(),
+//             }),
+//         ));
+//     }
 
-    Ok(())
-}
-
-async fn log_action(db: &PgPool, action: &str, container_name: &str) {
-    let _ = sqlx::query("INSERT INTO audit_log (action, container_name) VALUES (?, ?)")
-        .bind(action)
-        .bind(container_name)
-        .execute(db)
-        .await;
-}
+//     Ok(())
+// }
 async fn create_item(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(body): Json<CreateItemRequest>,
-) {
-    let _ = sqlx::query!(r#"
-         INSERT INTO items (user_id, name, tags, description, location, last_seen, searching) VALUES ($1, $2, $3, $4, $5, $6, $7);
-         "#, 1, body.name, body.tags, body.desc, body.loc, chrono::offset::Local::now(), false).execute(&state.db).await;
+) -> Result<Json<i32>, StatusCode> {
+    let result = sqlx::query!(r#"
+         INSERT INTO items (user_id, name, tags, description, location, last_seen, searching) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id;
+         "#, 1, body.name, body.tags, body.desc, body.loc, chrono::offset::Local::now(), false).fetch_one(&state.db).await;
+    match result {
+        Ok(r) => Ok(Json(r.id)),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
 }
 async fn get_item_info(
     State(state): State<Arc<AppState>>,
@@ -116,7 +112,7 @@ async fn edit_item(
     headers: HeaderMap,
     Path(id): Path<i32>,
     Json(body): Json<ModifyItemRequest>,
-) -> Result<(), StatusCode> {
+) -> Result<Json<i32>, StatusCode> {
     let result = sqlx::query!(
         r#"
         UPDATE items
@@ -139,7 +135,7 @@ async fn edit_item(
     .fetch_optional(&state.db)
     .await;
     match result {
-        Ok(Some(_)) => Ok(()),
+        Ok(Some(r)) => Ok(Json(r.id)),
         Ok(None) => Err(StatusCode::NOT_FOUND),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
@@ -148,17 +144,17 @@ async fn delete_item(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(id): Path<i32>,
-) -> Result<(), StatusCode> {
+) -> Result<Json<i32>, StatusCode> {
     let result = sqlx::query!(
         r#"
-        DELETE FROM items WHERE id = $1
+        DELETE FROM items WHERE id = $1 RETURNING id
         "#,
         id
     )
-    .execute(&state.db)
+    .fetch_one(&state.db)
     .await;
     match result {
-        Ok(_) => Ok(()),
+        Ok(r) => Ok(Json(r.id)),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
@@ -222,9 +218,7 @@ async fn scanned_item(
                         Its location is supposed to be: {} <br>
                         Is the owner (well, we don't know who it is) searching for it: {}
                         "#,
-                        r.name,
-                        r.location,
-                        r.searching,
+                        r.name, r.location, r.searching,
                     )
                 }
             })
@@ -232,6 +226,24 @@ async fn scanned_item(
         Ok(None) => Err(StatusCode::NOT_FOUND),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
+}
+async fn mark_item_seen(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<i32>,
+) -> Result<Json<i32>, StatusCode> {
+    let result = sqlx::query!(r#"
+            UPDATE items
+            SET 
+                last_seen = $1
+            WHERE id = $2
+            RETURNING id
+        "#, chrono::offset::Local::now(), id).fetch_optional(&state.db).await;
+    match result {
+        Ok(Some(r)) => Ok(Json(r.id)),
+        Ok(None) => Err(StatusCode::NOT_FOUND),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+     }
 }
 async fn health() -> Json<ApiResponse> {
     Json(ApiResponse {
@@ -260,7 +272,7 @@ async fn main() {
         .route("/api/items/{id}", delete(delete_item))
         .route("/api/items", get(list_items))
         .route("/_{id}", get(scanned_item))
-        // .route("/#{id}/seen", post(mark_item_seen))
+        .route("/#{id}/seen", post(mark_item_seen))
         // .route("/search", get(search_item))
         .with_state(state);
 
