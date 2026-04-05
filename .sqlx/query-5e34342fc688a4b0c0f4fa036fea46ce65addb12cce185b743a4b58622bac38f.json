@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE items\n        SET\n            name = COALESCE($1, name),\n            description = COALESCE($2, description),\n            tags = COALESCE($3, tags),\n            location = COALESCE($4, location),\n            searching = COALESCE($5, searching)\n        WHERE user_id = 1 AND id = $6\n        RETURNING id;\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Bool",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5e34342fc688a4b0c0f4fa036fea46ce65addb12cce185b743a4b58622bac38f"
+}

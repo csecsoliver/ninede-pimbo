@@ -1,20 +1,19 @@
 use axum::{
-    Error, Json, Router,
+    Json, Router,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     routing::{delete, get, patch, post},
 };
-use chrono::{DateTime, Local, Utc};
+use chrono::{Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{
-    Database, PgPool,
-    postgres::{self, PgPoolOptions},
+    PgPool,
+    postgres::{PgPoolOptions},
 };
-use std::{collections::linked_list, fmt::format, os::linux::raw::stat, sync::Arc};
+use std::{sync::Arc};
 
 struct AppState {
     db: PgPool,
-    api_key: String,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -25,7 +24,7 @@ struct ItemInfo {
     tags: String,
     description: String,
     location: String,
-    last_seen: chrono::DateTime<Local>,
+    last_seen: chrono::DateTime<Utc>,
     searching: bool,
 }
 
@@ -45,23 +44,23 @@ struct ModifyItemRequest {
     searching: Option<bool>,
 }
 
-#[derive(Serialize)]
-struct ApiResponse {
-    message: String,
-}
+// #[derive(Serialize)]
+// struct ApiResponse {
+//     message: String,
+// }
 #[derive(Serialize, sqlx::FromRow, Default)]
 struct User {
     id: i32,
     email: Option<String>,
     passhash: Option<String>,
 }
-#[derive(Serialize, sqlx::FromRow)]
-struct Accesskey {
-    id: i32,
-    user_id: i32,
-    keytext: String,
-    expiry: Option<chrono::DateTime<Local>>,
-}
+// #[derive(Serialize, sqlx::FromRow)]
+// struct Accesskey {
+//     id: i32,
+//     user_id: i32,
+//     keytext: String,
+//     expiry: Option<chrono::DateTime<Local>>,
+// }
 
 // fn check_auth(headers: &HeaderMap, api_key: &str) -> Result<(), (StatusCode, Json<ApiResponse>)> {
 //     let provided = headers
@@ -82,12 +81,12 @@ struct Accesskey {
 // }
 async fn create_item(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    _: HeaderMap,
     Json(body): Json<CreateItemRequest>,
 ) -> Result<Json<i32>, StatusCode> {
     let result = sqlx::query!(r#"
          INSERT INTO items (user_id, name, tags, description, location, last_seen, searching) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id;
-         "#, 1, body.name, body.tags, body.desc, body.loc, chrono::offset::Local::now(), false).fetch_one(&state.db).await;
+         "#, 1, body.name, body.tags, body.desc, body.loc, chrono::offset::Utc::now(), false).fetch_one(&state.db).await;
     match result {
         Ok(r) => Ok(Json(r.id)),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
@@ -95,7 +94,7 @@ async fn create_item(
 }
 async fn get_item_info(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    _: HeaderMap,
     Path(id): Path<i32>,
 ) -> Result<Json<ItemInfo>, StatusCode> {
     let result = sqlx::query_as!(ItemInfo, r#"
@@ -109,7 +108,7 @@ async fn get_item_info(
 }
 async fn edit_item(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    _: HeaderMap,
     Path(id): Path<i32>,
     Json(body): Json<ModifyItemRequest>,
 ) -> Result<Json<i32>, StatusCode> {
@@ -142,7 +141,7 @@ async fn edit_item(
 }
 async fn delete_item(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    _: HeaderMap,
     Path(id): Path<i32>,
 ) -> Result<Json<i32>, StatusCode> {
     let result = sqlx::query!(
@@ -160,7 +159,7 @@ async fn delete_item(
 }
 async fn list_items(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    _: HeaderMap,
 ) -> Result<Json<Vec<ItemInfo>>, StatusCode> {
     let result = sqlx::query_as!(
         ItemInfo,
@@ -177,7 +176,7 @@ async fn list_items(
 }
 async fn scanned_item(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    _: HeaderMap,
     Path(id): Path<i32>,
 ) -> Result<String, StatusCode> {
     let result = sqlx::query_as!(ItemInfo, r#"
@@ -229,7 +228,7 @@ async fn scanned_item(
 }
 async fn mark_item_seen(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    _: HeaderMap,
     Path(id): Path<i32>,
 ) -> Result<Json<i32>, StatusCode> {
     let result = sqlx::query!(r#"
@@ -245,15 +244,14 @@ async fn mark_item_seen(
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
      }
 }
-async fn health() -> Json<ApiResponse> {
-    Json(ApiResponse {
-        message: "ok".to_string(),
-    })
-}
+// async fn health() -> Json<ApiResponse> {
+//     Json(ApiResponse {
+//         message: "ok".to_string(),
+//     })
+// }
 
 #[tokio::main]
 async fn main() {
-    let api_key = std::env::var("API_KEY").unwrap_or(("asd").to_string());
     let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let db = PgPoolOptions::new()
         .max_connections(20)
@@ -263,7 +261,7 @@ async fn main() {
 
     let _ = sqlx::migrate!().run(&db).await;
 
-    let state = Arc::new(AppState { db, api_key });
+    let state = Arc::new(AppState { db});
 
     let app = Router::new()
         .route("/api/items", post(create_item))
