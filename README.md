@@ -1,5 +1,6 @@
 # ninede-pimbo (9-e.cc personal inventory management by olio)
 ## Partially complete docs at [https://q238dk0jb7.apidog.io](https://q238dk0jb7.apidog.io)
+## Prod deployment at [https://i.9-e.cc](https://i.9-e.cc)
 ## endpoints
 Routes starting with api are the json endpoints, ones not are html, plain text or form endpoints
 1. /api/items (post) (auth)  
