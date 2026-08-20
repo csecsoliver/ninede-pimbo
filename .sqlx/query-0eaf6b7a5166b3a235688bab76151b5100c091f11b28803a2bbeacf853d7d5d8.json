@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM accesskeys WHERE keytext = $1 AND session",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0eaf6b7a5166b3a235688bab76151b5100c091f11b28803a2bbeacf853d7d5d8"
+}

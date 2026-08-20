@@ -1,7 +1,7 @@
 //! Every sql statement the app runs lives here, so the http layers (json api
 //! and html pages) can share one set of queries.
 
-use crate::models::{ItemInfo, User};
+use crate::models::{ItemInfo, ModifyItemRequest, User};
 use sqlx::PgPool;
 
 /// Resolve an access key to the user it belongs to, ignoring expired keys.
@@ -124,18 +124,21 @@ pub async fn create_item(
     Ok(row.id)
 }
 
-/// `None` fields are left untouched. Returns `None` when the item does not
-/// exist or belongs to somebody else.
+/// `None` fields of `changes` are left untouched. Returns `None` when the item
+/// does not exist or belongs to somebody else.
 pub async fn update_item(
     db: &PgPool,
     user_id: i32,
     id: i32,
-    name: Option<String>,
-    tags: Option<String>,
-    description: Option<String>,
-    location: Option<String>,
-    searching: Option<bool>,
+    changes: ModifyItemRequest,
 ) -> Result<Option<i32>, sqlx::Error> {
+    let ModifyItemRequest {
+        name,
+        tags,
+        desc: description,
+        loc: location,
+        searching,
+    } = changes;
     let row = sqlx::query!(
         r#"
         UPDATE items
@@ -193,6 +196,70 @@ pub async fn bootstrap_key(db: &PgPool, keytext: &str) -> Result<(), sqlx::Error
         WHERE EXISTS (SELECT 1 FROM users WHERE id = 1)
           AND NOT EXISTS (SELECT 1 FROM accesskeys WHERE keytext = $1)
         "#,
+        keytext
+    )
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Look an account up by email, case insensitively.
+pub async fn user_by_email(db: &PgPool, email: &str) -> Result<Option<User>, sqlx::Error> {
+    sqlx::query_as!(
+        User,
+        "SELECT id, email, passhash FROM users WHERE lower(email) = lower($1)",
+        email
+    )
+    .fetch_optional(db)
+    .await
+}
+
+/// Create an account. `Ok(None)` means the email is already taken.
+pub async fn create_user(
+    db: &PgPool,
+    email: &str,
+    passhash: &str,
+) -> Result<Option<i32>, sqlx::Error> {
+    let created = sqlx::query!(
+        "INSERT INTO users (email, passhash) VALUES ($1, $2) RETURNING id",
+        email,
+        passhash
+    )
+    .fetch_one(db)
+    .await;
+    match created {
+        Ok(row) => Ok(Some(row.id)),
+        // Somebody signed up with the same address in between our check and
+        // this insert; the unique index caught it.
+        Err(sqlx::Error::Database(e)) if e.is_unique_violation() => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Mint an access key for a browser session.
+pub async fn create_session_key(
+    db: &PgPool,
+    user_id: i32,
+    keytext: &str,
+    days: i64,
+) -> Result<(), sqlx::Error> {
+    let expiry = chrono::Utc::now() + chrono::Duration::days(days);
+    sqlx::query!(
+        "INSERT INTO accesskeys (user_id, keytext, expiry, session) VALUES ($1, $2, $3, true)",
+        user_id,
+        keytext,
+        expiry
+    )
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Drop a session key on logout, so the cookie is dead even if it was copied.
+/// Keys you made by hand for an api client are left alone.
+pub async fn revoke_key(db: &PgPool, keytext: &str) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        "DELETE FROM accesskeys WHERE keytext = $1 AND session",
         keytext
     )
     .execute(db)

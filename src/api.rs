@@ -60,18 +60,7 @@ pub async fn edit_item(
     if body.name.as_ref().is_some_and(|n| n.trim().is_empty()) {
         return Err(StatusCode::BAD_REQUEST);
     }
-    match db::update_item(
-        &state.db,
-        who.user_id,
-        id,
-        body.name,
-        body.tags,
-        body.desc,
-        body.loc,
-        body.searching,
-    )
-    .await
-    {
+    match db::update_item(&state.db, who.user_id, id, body).await {
         Ok(Some(id)) => Ok(Json(id)),
         Ok(None) => Err(StatusCode::NOT_FOUND),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),

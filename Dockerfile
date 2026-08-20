@@ -26,7 +26,8 @@ FROM docker.io/library/debian:trixie-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates libssl3 curl \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --system --create-home --uid 10001 pimbo
+    && groupadd --gid 10001 pimbo \
+    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin pimbo
 
 COPY --from=build /src/target/release/ninede-pimbo /usr/local/bin/ninede-pimbo
 

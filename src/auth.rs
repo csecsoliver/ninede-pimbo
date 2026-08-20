@@ -1,10 +1,18 @@
-//! Access-key authentication, shared by the json api and the html pages.
+//! Authentication, shared by the json api and the html pages.
 //!
 //! A request proves who it is with either the `x-api-key` header (api clients)
 //! or the `pimbo_key` cookie (browsers, set by `POST /login`). Both are looked
-//! up in the `accesskeys` table.
+//! up in the `accesskeys` table: a key *is* the session.
+//!
+//! Logging in with an email and password mints one of those keys, so passwords
+//! are checked in exactly one place, here, and never travel further than the
+//! login form.
 
 use crate::{AppState, db};
+use argon2::{
+    Argon2, PasswordHasher, PasswordVerifier,
+    password_hash::{PasswordHash, SaltString, rand_core::OsRng, rand_core::RngCore},
+};
 use axum::{
     extract::FromRequestParts,
     http::{StatusCode, request::Parts},
@@ -29,6 +37,10 @@ pub struct WebAuth {
 
 /// Whoever this is, if anyone. Used by pages that render for both.
 pub struct MaybeAuth(pub Option<i32>);
+
+/// The key a request carried, valid or not. Logout needs it to throw the
+/// session away rather than merely forget the cookie.
+pub struct PresentedKey(pub Option<String>);
 
 fn cookie(parts: &Parts, name: &str) -> Option<String> {
     parts
@@ -99,6 +111,17 @@ impl FromRequestParts<Arc<AppState>> for MaybeAuth {
     }
 }
 
+impl FromRequestParts<Arc<AppState>> for PresentedKey {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        _: &Arc<AppState>,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(PresentedKey(presented_key(parts)))
+    }
+}
+
 /// Cheap sanity check before we go near the database, and it keeps anything
 /// that could not survive a `Set-Cookie` round trip out of the cookie.
 pub fn plausible_key(key: &str) -> bool {
@@ -121,4 +144,42 @@ pub fn logout_cookie(secure: bool) -> String {
         "{COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{}",
         if secure { "; Secure" } else { "" }
     )
+}
+
+/// How long a session minted by an email login lasts.
+pub const SESSION_DAYS: i64 = 30;
+
+/// A fresh, unguessable access key. Hex so it survives a cookie untouched.
+pub fn new_session_key() -> String {
+    let mut bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Argon2id, on the blocking pool: hashing a password is deliberately slow and
+/// would otherwise stall the runtime.
+pub async fn hash_password(password: String) -> Option<String> {
+    tokio::task::spawn_blocking(move || {
+        let salt = SaltString::generate(&mut OsRng);
+        Argon2::default()
+            .hash_password(password.as_bytes(), &salt)
+            .ok()
+            .map(|hash| hash.to_string())
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// False for anything that is not a password this hash was made from, which
+/// includes the empty `passhash` the placeholder user carries.
+pub async fn verify_password(password: String, hash: String) -> bool {
+    tokio::task::spawn_blocking(move || match PasswordHash::new(&hash) {
+        Ok(parsed) => Argon2::default()
+            .verify_password(password.as_bytes(), &parsed)
+            .is_ok(),
+        Err(_) => false,
+    })
+    .await
+    .unwrap_or(false)
 }
