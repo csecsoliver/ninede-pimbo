@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT user_id FROM accesskeys\n        WHERE keytext = $1 AND (expiry IS NULL OR expiry > now())\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1dfacb500707ecd77fda22e0c1dcb11431d27e3a2c126a96ff09b3ba14e7eeba"
+}

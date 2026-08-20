@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id, user_id, name, tags, description, location, last_seen, searching FROM items WHERE id = $1\n        ",
+  "query": "\n        SELECT id, user_id, name, tags, description, location, last_seen, searching\n        FROM items\n        WHERE user_id = $1\n          AND (name ILIKE $2 OR tags ILIKE $2 OR description ILIKE $2 OR location ILIKE $2)\n        ORDER BY searching DESC, name ASC\n        ",
   "describe": {
     "columns": [
       {
@@ -46,7 +46,8 @@
     ],
     "parameters": {
       "Left": [
-        "Int4"
+        "Int4",
+        "Text"
       ]
     },
     "nullable": [
@@ -60,5 +61,5 @@
       false
     ]
   },
-  "hash": "08198cc3c9c27c4ff5231c1fe56245f195487739100e497e0fba79572b9a8fc5"
+  "hash": "a0192b67f55edbdd73a99c9ff909a545317b0a99d98ee6e824595cbdd36335be"
 }

@@ -1,283 +1,97 @@
+mod api;
+mod auth;
+mod db;
+mod html;
+mod models;
+mod web;
+
 use axum::{
-    Json, Router,
-    extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    Router,
     routing::{delete, get, patch, post},
 };
-use chrono::{Utc};
-use serde::{Deserialize, Serialize};
-use sqlx::{
-    PgPool,
-    postgres::{PgPoolOptions},
-};
-use std::{sync::Arc};
+use sqlx::{PgPool, postgres::PgPoolOptions};
+use std::sync::Arc;
 
-struct AppState {
-    db: PgPool,
+pub struct AppState {
+    pub db: PgPool,
+    /// Whether the session cookie is marked `Secure`. On by default; turn it
+    /// off with `COOKIE_SECURE=false` when serving over plain http locally.
+    pub cookie_secure: bool,
 }
 
-#[derive(Serialize, sqlx::FromRow)]
-struct ItemInfo {
-    id: i32,
-    user_id: Option<i32>,
-    name: String,
-    tags: String,
-    description: String,
-    location: String,
-    last_seen: chrono::DateTime<Utc>,
-    searching: bool,
-}
-
-#[derive(Deserialize)]
-struct CreateItemRequest {
-    name: String,
-    tags: String,
-    desc: String,
-    loc: String,
-}
-#[derive(Deserialize)]
-struct ModifyItemRequest {
-    name: Option<String>,
-    tags: Option<String>,
-    desc: Option<String>,
-    loc: Option<String>,
-    searching: Option<bool>,
-}
-
-// #[derive(Serialize)]
-// struct ApiResponse {
-//     message: String,
-// }
-#[derive(Serialize, sqlx::FromRow, Default)]
-struct User {
-    id: i32,
-    email: Option<String>,
-    passhash: Option<String>,
-}
-// #[derive(Serialize, sqlx::FromRow)]
-// struct Accesskey {
-//     id: i32,
-//     user_id: i32,
-//     keytext: String,
-//     expiry: Option<chrono::DateTime<Local>>,
-// }
-
-// fn check_auth(headers: &HeaderMap, api_key: &str) -> Result<(), (StatusCode, Json<ApiResponse>)> {
-//     let provided = headers
-//         .get("x-api-key")
-//         .and_then(|v| v.to_str().ok())
-//         .unwrap_or("");
-
-//     if provided != api_key {
-//         return Err((
-//             StatusCode::UNAUTHORIZED,
-//             Json(ApiResponse {
-//                 message: "invalid or missing API key".to_string(),
-//             }),
-//         ));
-//     }
-
-//     Ok(())
-// }
-async fn create_item(
-    State(state): State<Arc<AppState>>,
-    _: HeaderMap,
-    Json(body): Json<CreateItemRequest>,
-) -> Result<Json<i32>, StatusCode> {
-    let result = sqlx::query!(r#"
-         INSERT INTO items (user_id, name, tags, description, location, last_seen, searching) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id;
-         "#, 1, body.name, body.tags, body.desc, body.loc, chrono::offset::Utc::now(), false).fetch_one(&state.db).await;
-    match result {
-        Ok(r) => Ok(Json(r.id)),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+fn env_flag(name: &str, default: bool) -> bool {
+    match std::env::var(name) {
+        Ok(value) => !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off" | ""
+        ),
+        Err(_) => default,
     }
 }
-async fn get_item_info(
-    State(state): State<Arc<AppState>>,
-    _: HeaderMap,
-    Path(id): Path<i32>,
-) -> Result<Json<ItemInfo>, StatusCode> {
-    let result = sqlx::query_as!(ItemInfo, r#"
-        SELECT id, user_id, name, tags, description, location, last_seen, searching FROM items WHERE user_id = 1 AND id = $1
-        "#, id).fetch_optional(&state.db).await;
-    match result {
-        Ok(Some(r)) => Ok(Json(r)),
-        Ok(None) => Err(StatusCode::NOT_FOUND),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
-    }
-}
-async fn edit_item(
-    State(state): State<Arc<AppState>>,
-    _: HeaderMap,
-    Path(id): Path<i32>,
-    Json(body): Json<ModifyItemRequest>,
-) -> Result<Json<i32>, StatusCode> {
-    let result = sqlx::query!(
-        r#"
-        UPDATE items
-        SET
-            name = COALESCE($1, name),
-            description = COALESCE($2, description),
-            tags = COALESCE($3, tags),
-            location = COALESCE($4, location),
-            searching = COALESCE($5, searching)
-        WHERE user_id = 1 AND id = $6
-        RETURNING id;
-        "#,
-        body.name,
-        body.desc,
-        body.tags,
-        body.loc,
-        body.searching,
-        id
-    )
-    .fetch_optional(&state.db)
-    .await;
-    match result {
-        Ok(Some(r)) => Ok(Json(r.id)),
-        Ok(None) => Err(StatusCode::NOT_FOUND),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
-    }
-}
-async fn delete_item(
-    State(state): State<Arc<AppState>>,
-    _: HeaderMap,
-    Path(id): Path<i32>,
-) -> Result<Json<i32>, StatusCode> {
-    let result = sqlx::query!(
-        r#"
-        DELETE FROM items WHERE id = $1 RETURNING id
-        "#,
-        id
-    )
-    .fetch_one(&state.db)
-    .await;
-    match result {
-        Ok(r) => Ok(Json(r.id)),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
-    }
-}
-async fn list_items(
-    State(state): State<Arc<AppState>>,
-    _: HeaderMap,
-) -> Result<Json<Vec<ItemInfo>>, StatusCode> {
-    let result = sqlx::query_as!(
-        ItemInfo,
-        r#"
-        SELECT id, user_id, name, tags, description, location, last_seen, searching FROM items
-        "#
-    )
-    .fetch_all(&state.db)
-    .await;
-    match result {
-        Ok(r) => Ok(Json(r)),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
-    }
-}
-async fn scanned_item(
-    State(state): State<Arc<AppState>>,
-    _: HeaderMap,
-    Path(id): Path<i32>,
-) -> Result<String, StatusCode> {
-    let result = sqlx::query_as!(ItemInfo, r#"
-        SELECT id, user_id, name, tags, description, location, last_seen, searching FROM items WHERE id = $1
-        "#, id).fetch_optional(&state.db).await;
-    match result {
-        Ok(Some(r)) => {
-            let user = sqlx::query_as!(
-                User,
-                "SELECT id, email, passhash FROM users WHERE ID = $1",
-                r.user_id
-            )
-            .fetch_optional(&state.db)
-            .await;
-            Ok(match user.ok().flatten() {
-                Some(u) => {
-                    format!(
-                        r#"
-                        This item belongs to {} <br>
-                        Name: {} <br>
-                        Its location is supposed to be: {} <br>
-                        Is the owner searching for it: {}
-                        "#,
-                        match u.email {
-                            Some(e) => e,
-                            None => u.id.to_string(),
-                        },
-                        r.name,
-                        r.location,
-                        r.searching,
-                    )
-                }
-                None => {
-                    format!(
-                        r#"
-                        This item got orphaned <br>
-                        Name: {} <br>
-                        Its location is supposed to be: {} <br>
-                        Is the owner (well, we don't know who it is) searching for it: {}
-                        "#,
-                        r.name, r.location, r.searching,
-                    )
-                }
-            })
-        }
-        Ok(None) => Err(StatusCode::NOT_FOUND),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
-    }
-}
-async fn mark_item_seen(
-    State(state): State<Arc<AppState>>,
-    _: HeaderMap,
-    Path(id): Path<i32>,
-) -> Result<Json<i32>, StatusCode> {
-    let result = sqlx::query!(r#"
-            UPDATE items
-            SET 
-                last_seen = $1
-            WHERE id = $2
-            RETURNING id
-        "#, chrono::offset::Local::now(), id).fetch_optional(&state.db).await;
-    match result {
-        Ok(Some(r)) => Ok(Json(r.id)),
-        Ok(None) => Err(StatusCode::NOT_FOUND),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
-     }
-}
-// async fn health() -> Json<ApiResponse> {
-//     Json(ApiResponse {
-//         message: "ok".to_string(),
-//     })
-// }
 
 #[tokio::main]
 async fn main() {
     let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let bind = std::env::var("BIND").unwrap_or_else(|_| "0.0.0.0:3000".to_string());
+
     let db = PgPoolOptions::new()
         .max_connections(20)
         .connect(&db_url)
         .await
-        .expect(&format!("Failed to connect to db at: {}", db_url));
+        .unwrap_or_else(|e| panic!("failed to connect to the database: {e}"));
 
-    let _ = sqlx::migrate!().run(&db).await;
+    sqlx::migrate!()
+        .run(&db)
+        .await
+        .expect("failed to run migrations");
 
-    let state = Arc::new(AppState { db});
+    // Handy for a fresh deployment: hand user 1 a key you already know.
+    if let Ok(key) = std::env::var("BOOTSTRAP_KEY") {
+        let key = key.trim();
+        if auth::plausible_key(key) {
+            db::bootstrap_key(&db, key)
+                .await
+                .expect("failed to store BOOTSTRAP_KEY");
+            println!("BOOTSTRAP_KEY is available as an access key for user 1");
+        } else {
+            eprintln!("BOOTSTRAP_KEY is not a usable key, ignoring it");
+        }
+    }
+
+    let state = Arc::new(AppState {
+        db,
+        cookie_secure: env_flag("COOKIE_SECURE", true),
+    });
 
     let app = Router::new()
-        .route("/api/items", post(create_item))
-        .route("/api/items/{id}", get(get_item_info))
-        .route("/api/items/{id}", patch(edit_item))
-        .route("/api/items/{id}", delete(delete_item))
-        .route("/api/items", get(list_items))
-        .route("/_{id}", get(scanned_item))
-        .route("/_{id}/seen", post(mark_item_seen))
-        // .route("/search", get(search_item))
+        // json api
+        .route("/api/items", post(api::create_item).get(api::list_items))
+        .route("/api/items/{id}", get(api::get_item_info))
+        .route("/api/items/{id}", patch(api::edit_item))
+        .route("/api/items/{id}", delete(api::delete_item))
+        .route("/api/search", get(api::search_items))
+        .route("/api/health", get(api::health))
+        // html pages
+        .route("/", get(web::index))
+        .route("/login", get(web::login_page).post(web::login_submit))
+        .route("/logout", post(web::logout))
+        .route("/dash", get(web::dash))
+        .route("/search", get(web::search))
+        .route("/items", post(web::create_item))
+        .route("/items/new", get(web::new_item_page))
+        .route("/items/{id}", get(web::item_page).post(web::update_item))
+        .route("/items/{id}/seen", post(web::mark_seen))
+        .route("/items/{id}/searching", post(web::set_searching))
+        .route("/items/{id}/delete", post(web::delete_item))
+        // what a stranger who finds one of your things sees
+        .route("/_{id}", get(web::public_item))
+        .route("/_{id}/seen", post(web::public_mark_seen))
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+    let listener = tokio::net::TcpListener::bind(&bind)
         .await
-        .expect("failed to bind");
+        .unwrap_or_else(|e| panic!("failed to bind {bind}: {e}"));
 
-    println!("listening on http://0.0.0.0:3000");
+    println!("listening on http://{bind}");
     axum::serve(listener, app).await.expect("server error");
 }

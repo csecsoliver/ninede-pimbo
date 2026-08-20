@@ -1,23 +1,85 @@
 # ninede-pimbo (9-e.cc personal inventory management by olio)
 ## Partially complete docs at [https://q238dk0jb7.apidog.io](https://q238dk0jb7.apidog.io)
 ## Prod deployment at [https://i.9-e.cc](https://i.9-e.cc)
+
+Keep track of where your things live, and of which ones you are currently
+looking for. Put a label with an item's public address on the item itself, and
+whoever finds it can tell you they saw it.
+
+The web interface is html and nothing else: no javascript, no stylesheet. Every
+page works with plain links and forms, so it renders in anything that speaks
+http.
+
+## Running it
+
+`docker compose up -d --build`, or `podman-compose up -d --build`. The app
+creates its own tables on startup.
+
+Copy `.env.example` to `.env` first and set `BOOTSTRAP_KEY` to the access key
+you want to log in with; the app registers it for user 1 on startup.
+
+Without compose, the app needs `DATABASE_URL` and nothing else:
+
+```
+DATABASE_URL=postgres://user:pass@host/db cargo run
+```
+
+| variable | default | meaning |
+| --- | --- | --- |
+| `DATABASE_URL` | required | postgres connection string |
+| `BIND` | `0.0.0.0:3000` | address to listen on |
+| `COOKIE_SECURE` | `true` | mark the session cookie `Secure`; set `false` to log in over plain http |
+| `BOOTSTRAP_KEY` | unset | if set, becomes an access key for user 1 |
+
+The sqlx macros are checked against a real database at compile time. Building
+without one works from the committed `.sqlx/` data (`SQLX_OFFLINE=true`, which
+the Dockerfile sets); after changing a query, regenerate it with
+`cargo sqlx prepare` against a live database.
+
+## Authentication
+A row in `accesskeys` is an account's password. Present it either as the
+`x-api-key` header (api clients) or by logging in at `/login`, which puts it in
+the `pimbo_key` cookie. Expired keys (`expiry` in the past) are rejected;
+`expiry = NULL` never expires.
+
+The migration seeds the key `placeholder` for user 1. Delete it on any
+deployment you care about:
+
+```sql
+DELETE FROM accesskeys WHERE keytext = 'placeholder';
+```
+
 ## endpoints
-Routes starting with api are the json endpoints, ones not are html, plain text or form endpoints
-1. /api/items (post) (auth)  
-Create an item
-2. /api/items/{id} (get) (auth)
-Get info about an item
-3. /api/items/{id} (patch) (auth)
-modify an item
-4. /api/items/{id} (delete) (auth)
-3. /api/items (get) (auth)  
-4. /#{id} (get)  
-5. /#{id}/seen (post)
-5. /login (get) (not implemented)  
-6. /login (post) (not implemented)  
-6. /dash (get) (not implemented)  
-8. /search?q={query} (get) (auth)  
-7. / (get)  
+Routes starting with api are the json endpoints, ones not are html pages and
+form targets. Browsers only send GET and POST, so the html side does its writes
+with POST and answers with a redirect.
+
+### json api (auth)
+1. `/api/items` (post) — create an item, returns its id
+2. `/api/items` (get) — list your items
+3. `/api/items/{id}` (get) — one item
+4. `/api/items/{id}` (patch) — modify an item, fields left out are unchanged
+5. `/api/items/{id}` (delete) — delete an item
+6. `/api/search?q={query}` (get) — search name, tags, description and location
+7. `/api/health` (get) — no auth, used by the container healthcheck
+
+### html
+1. `/` (get) — landing page, or your dashboard when logged in
+2. `/login` (get, post) — log in with an access key
+3. `/logout` (post)
+4. `/dash` (get) (auth) — everything you own
+5. `/search?q={query}` (get) (auth)
+6. `/items/new` (get) (auth) — the add-an-item form
+7. `/items` (post) (auth) — create
+8. `/items/{id}` (get, post) (auth) — view, and save edits
+9. `/items/{id}/seen` (post) (auth) — record that you saw it just now
+10. `/items/{id}/searching` (post) (auth) — start or stop looking for it
+11. `/items/{id}/delete` (post) (auth)
+12. `/_{id}` (get) — the public page for an item, for whoever finds it
+13. `/_{id}/seen` (post) — a finder reporting the item is still around
+
+Items are scoped to the account that owns them: an item that is not yours is a
+404, whichever route you ask through.
 
 ## DB tables
 ### users (placeholder table)
@@ -40,3 +102,14 @@ CONSTRAINT fk_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 6. last_seen (TIMESTAMPZ)
 7. searching (BOOL)
 CONSTRAINT fk_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+
+## Source layout
+| file | what is in it |
+| --- | --- |
+| `src/main.rs` | startup, configuration, the route table |
+| `src/db.rs` | every sql statement |
+| `src/auth.rs` | access-key extractors and the session cookie |
+| `src/html.rs` | page shell, escaping, shared markup |
+| `src/web.rs` | the html pages and form handlers |
+| `src/api.rs` | the json handlers |
+| `src/models.rs` | the shared structs |

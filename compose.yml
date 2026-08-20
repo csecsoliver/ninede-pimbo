@@ -1,0 +1,50 @@
+# Works with both `docker compose up -d` and `podman-compose up -d`
+# (or `podman compose up -d`).
+#
+# Settings come from a .env file next to this one; see .env.example.
+
+services:
+  db:
+    image: docker.io/library/postgres:18-alpine
+    environment:
+      POSTGRES_USER: pimbo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pimbo}
+      POSTGRES_DB: pimbo
+    volumes:
+      - pimbo-db:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pimbo -d pimbo"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  app:
+    build: .
+    image: localhost/ninede-pimbo:latest
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # The app creates its tables on startup.
+      DATABASE_URL: postgres://pimbo:${POSTGRES_PASSWORD:-pimbo}@db:5432/pimbo
+      BIND: 0.0.0.0:3000
+      # Leave this on when the app is served over https, as it should be.
+      # Set COOKIE_SECURE=false to log in over plain http.
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      # Optional: gives user 1 this access key on startup, so a fresh
+      # deployment has something to log in with.
+      BOOTSTRAP_KEY: ${BOOTSTRAP_KEY:-}
+    ports:
+      - "${PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    # Also covers the case where the app starts before the database is ready.
+    restart: unless-stopped
+
+volumes:
+  pimbo-db:

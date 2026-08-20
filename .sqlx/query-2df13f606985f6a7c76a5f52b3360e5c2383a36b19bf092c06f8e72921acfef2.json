@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, email, passhash FROM users WHERE ID = $1",
+  "query": "SELECT id, email, passhash FROM users WHERE id = $1",
   "describe": {
     "columns": [
       {
@@ -30,5 +30,5 @@
       true
     ]
   },
-  "hash": "426f40153e11a9b2afffcb5e3c6342b2f0dffa0c0041dee45c4afe1ff2aeb6be"
+  "hash": "2df13f606985f6a7c76a5f52b3360e5c2383a36b19bf092c06f8e72921acfef2"
 }

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO accesskeys (user_id, keytext, expiry)\n        SELECT 1, $1, NULL\n        WHERE EXISTS (SELECT 1 FROM users WHERE id = 1)\n          AND NOT EXISTS (SELECT 1 FROM accesskeys WHERE keytext = $1)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3c8f89424e1353270bd12523b75ef4551b45d657d3c2f4b5fd264f3f5d357b02"
+}

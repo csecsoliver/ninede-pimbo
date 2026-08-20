@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id, user_id, name, tags, description, location, last_seen, searching FROM items WHERE user_id = 1 AND id = $1\n        ",
+  "query": "\n        SELECT id, user_id, name, tags, description, location, last_seen, searching\n        FROM items WHERE id = $1\n        ",
   "describe": {
     "columns": [
       {
@@ -60,5 +60,5 @@
       false
     ]
   },
-  "hash": "fcad1c6cef0c67cef052887e5ea87aa4bda6a725613b9c9c9ef8387883412204"
+  "hash": "3fba8e06e84792ba5c5ee0e4e3a6fec07eeab7b956623b11c686be7181f1db67"
 }
