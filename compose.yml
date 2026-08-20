@@ -32,8 +32,10 @@ services:
       # Leave this on when the app is served over https, as it should be.
       # Set COOKIE_SECURE=false to log in over plain http.
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      # Set to false once you have your account, to keep the deployment yours.
+      SIGNUP_OPEN: ${SIGNUP_OPEN:-true}
       # Optional: gives user 1 this access key on startup, so a fresh
-      # deployment has something to log in with.
+      # deployment has something to log in with even before anybody signs up.
       BOOTSTRAP_KEY: ${BOOTSTRAP_KEY:-}
     ports:
       - "${PORT:-3000}:3000"

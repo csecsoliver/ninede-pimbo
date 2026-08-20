@@ -17,6 +17,9 @@ pub struct AppState {
     /// Whether the session cookie is marked `Secure`. On by default; turn it
     /// off with `COOKIE_SECURE=false` when serving over plain http locally.
     pub cookie_secure: bool,
+    /// Whether strangers can create accounts. On by default; turn it off with
+    /// `SIGNUP_OPEN=false` to keep a deployment to yourself.
+    pub signup_open: bool,
 }
 
 fn env_flag(name: &str, default: bool) -> bool {
@@ -61,6 +64,7 @@ async fn main() {
     let state = Arc::new(AppState {
         db,
         cookie_secure: env_flag("COOKIE_SECURE", true),
+        signup_open: env_flag("SIGNUP_OPEN", true),
     });
 
     let app = Router::new()
@@ -74,6 +78,7 @@ async fn main() {
         // html pages
         .route("/", get(web::index))
         .route("/login", get(web::login_page).post(web::login_submit))
+        .route("/signup", get(web::signup_page).post(web::signup_submit))
         .route("/logout", post(web::logout))
         .route("/dash", get(web::dash))
         .route("/search", get(web::search))

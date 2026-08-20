@@ -6,6 +6,7 @@ description = "An inventory management app/api, made for personal use"
 license = "MIT"
 
 [dependencies]
+argon2 = "0.5.3"
 axum = { version = "0.8.8", features = ["json", "form", "query"] }
 chrono = {version = "0.4.44", features = ["serde"]}
 serde = { version = "1.0.228", features = ["derive"] }

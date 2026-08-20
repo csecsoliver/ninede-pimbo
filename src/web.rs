@@ -8,7 +8,7 @@ use crate::{
     auth::{MaybeAuth, WebAuth},
     db,
     html::{self, esc, item_table, message_page, nav, page, search_form},
-    models::{CreateItemRequest, ItemInfo, SearchQuery},
+    models::{CreateItemRequest, ItemInfo, ModifyItemRequest, SearchQuery},
 };
 use axum::{
     Form,
@@ -19,10 +19,26 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 
+/// The login page has two forms pointing at the same place: a browser sends
+/// only the fields of the form that was submitted, so which ones arrived tells
+/// us which way the person is logging in.
 #[derive(Deserialize)]
 pub struct LoginForm {
-    key: String,
+    email: Option<String>,
+    password: Option<String>,
+    key: Option<String>,
 }
+
+#[derive(Deserialize)]
+pub struct SignupForm {
+    email: String,
+    password: String,
+    password2: String,
+}
+
+/// Short enough to be typeable, long enough to be worth hashing.
+const MIN_PASSWORD: usize = 8;
+const MAX_PASSWORD: usize = 1024;
 
 #[derive(Deserialize)]
 pub struct EditForm {
@@ -69,7 +85,7 @@ fn not_found() -> Response {
 }
 
 /// `GET /` &mdash; the front door.
-pub async fn index(MaybeAuth(who): MaybeAuth) -> Response {
+pub async fn index(State(state): State<Arc<AppState>>, MaybeAuth(who): MaybeAuth) -> Response {
     if who.is_some() {
         return Redirect::to("/dash").into_response();
     }
@@ -85,83 +101,301 @@ item itself, and whoever finds it can tell you they saw it.</p>
 {}
 </main>
 "#,
-            login_form(None)
+            login_form(None, state.signup_open)
         ),
     )
     .into_response()
 }
 
-fn login_form(error: Option<&str>) -> String {
-    let problem = match error {
+fn problem(error: Option<&str>) -> String {
+    match error {
         Some(message) => format!("<p><strong>{}</strong></p>\n", esc(message)),
         None => String::new(),
+    }
+}
+
+fn login_form(error: Option<&str>, signup_open: bool) -> String {
+    let signup = if signup_open {
+        "<p>No account yet? <a href=\"/signup\">sign up</a>.</p>\n"
+    } else {
+        ""
     };
     format!(
         r#"<h2>Log in</h2>
 {problem}<form action="/login" method="post">
 <fieldset>
+<legend>Email and password</legend>
+<p><label for="email">email</label>
+<input type="email" id="email" name="email" required autocomplete="email" maxlength="254"></p>
+<p><label for="password">password</label>
+<input type="password" id="password" name="password" required autocomplete="current-password"></p>
+<p><button type="submit">log in</button></p>
+</fieldset>
+</form>
+<details>
+<summary>log in with an access key instead</summary>
+<form action="/login" method="post">
+<fieldset>
 <legend>Access key</legend>
 <label for="key">your access key</label>
-<input type="password" id="key" name="key" required autocomplete="current-password">
+<input type="password" id="key" name="key" required autocomplete="off">
 <button type="submit">log in</button>
 </fieldset>
 </form>
-"#
+</details>
+{signup}"#,
+        problem = problem(error),
+        signup = signup,
     )
 }
 
-/// `GET /login`
-pub async fn login_page(MaybeAuth(who): MaybeAuth) -> Response {
-    if who.is_some() {
-        return Redirect::to("/dash").into_response();
-    }
+fn login_screen(error: Option<&str>, signup_open: bool) -> Response {
     page(
         "Log in",
         &format!(
             "<header><h1>ninede-pimbo</h1></header>\n<hr>\n<main>\n{}</main>\n",
-            login_form(None)
+            login_form(error, signup_open)
         ),
     )
     .into_response()
 }
 
-/// `POST /login` &mdash; hand over an access key, get a cookie.
+/// `GET /login`
+pub async fn login_page(State(state): State<Arc<AppState>>, MaybeAuth(who): MaybeAuth) -> Response {
+    if who.is_some() {
+        return Redirect::to("/dash").into_response();
+    }
+    login_screen(None, state.signup_open)
+}
+
+/// `POST /login` &mdash; email and password, or an access key.
 pub async fn login_submit(
     State(state): State<Arc<AppState>>,
     Form(form): Form<LoginForm>,
 ) -> Response {
-    let key = form.key.trim().to_string();
-    let holder = if auth::plausible_key(&key) {
-        match db::user_for_key(&state.db, &key).await {
-            Ok(holder) => holder,
-            Err(_) => return oops(),
-        }
-    } else {
-        None
-    };
+    let email = form
+        .email
+        .map(|email| email.trim().to_string())
+        .filter(|email| !email.is_empty());
+    let key = form
+        .key
+        .map(|key| key.trim().to_string())
+        .filter(|key| !key.is_empty());
 
-    match holder {
-        Some(_) => (
+    if let Some(email) = email {
+        let account = match db::user_by_email(&state.db, &email).await {
+            Ok(account) => account,
+            Err(_) => return oops(),
+        };
+        // Same answer whether the address is unknown or the password is wrong.
+        let authenticated = match account {
+            Some(account) => {
+                let hash = account.passhash.clone().unwrap_or_default();
+                let password = form.password.unwrap_or_default();
+                if auth::verify_password(password, hash).await {
+                    Some(account.id)
+                } else {
+                    None
+                }
+            }
+            None => None,
+        };
+        return match authenticated {
+            Some(user_id) => start_session(&state, user_id).await,
+            None => (
+                StatusCode::UNAUTHORIZED,
+                login_screen(
+                    Some("That email and password do not match an account."),
+                    state.signup_open,
+                ),
+            )
+                .into_response(),
+        };
+    }
+
+    if let Some(key) = key {
+        let holder = if auth::plausible_key(&key) {
+            match db::user_for_key(&state.db, &key).await {
+                Ok(holder) => holder,
+                Err(_) => return oops(),
+            }
+        } else {
+            None
+        };
+        // An access key is its own session: it goes into the cookie as it is.
+        return match holder {
+            Some(_) => (
+                [(SET_COOKIE, auth::login_cookie(&key, state.cookie_secure))],
+                Redirect::to("/dash"),
+            )
+                .into_response(),
+            None => (
+                StatusCode::UNAUTHORIZED,
+                login_screen(
+                    Some("That key is not valid, or it has expired."),
+                    state.signup_open,
+                ),
+            )
+                .into_response(),
+        };
+    }
+
+    (
+        StatusCode::BAD_REQUEST,
+        login_screen(Some("Fill in one of the forms."), state.signup_open),
+    )
+        .into_response()
+}
+
+/// Mint a fresh key for this browser and hand it over as the cookie.
+async fn start_session(state: &Arc<AppState>, user_id: i32) -> Response {
+    let key = auth::new_session_key();
+    match db::create_session_key(&state.db, user_id, &key, auth::SESSION_DAYS).await {
+        Ok(()) => (
             [(SET_COOKIE, auth::login_cookie(&key, state.cookie_secure))],
             Redirect::to("/dash"),
         )
             .into_response(),
-        None => (
-            StatusCode::UNAUTHORIZED,
-            page(
-                "Log in",
-                &format!(
-                    "<header><h1>ninede-pimbo</h1></header>\n<hr>\n<main>\n{}</main>\n",
-                    login_form(Some("That key is not valid, or it has expired."))
-                ),
-            ),
-        )
-            .into_response(),
+        Err(_) => oops(),
     }
 }
 
-/// `POST /logout`
-pub async fn logout(State(state): State<Arc<AppState>>) -> Response {
+fn signup_form(error: Option<&str>, email: &str) -> String {
+    format!(
+        r#"<h2>Sign up</h2>
+{problem}<form action="/signup" method="post">
+<fieldset>
+<legend>A new account</legend>
+<p><label for="email">email</label>
+<input type="email" id="email" name="email" value="{email}" required autocomplete="email" maxlength="254"></p>
+<p><label for="password">password, {min} characters or more</label>
+<input type="password" id="password" name="password" required autocomplete="new-password" minlength="{min}" maxlength="{max}"></p>
+<p><label for="password2">the same password again</label>
+<input type="password" id="password2" name="password2" required autocomplete="new-password" minlength="{min}" maxlength="{max}"></p>
+<p><button type="submit">create the account</button></p>
+</fieldset>
+</form>
+<p>Already have an account? <a href="/login">log in</a>.</p>
+"#,
+        problem = problem(error),
+        email = esc(email),
+        min = MIN_PASSWORD,
+        max = MAX_PASSWORD,
+    )
+}
+
+fn signup_screen(error: Option<&str>, email: &str) -> Response {
+    page(
+        "Sign up",
+        &format!(
+            "<header><h1>ninede-pimbo</h1></header>\n<hr>\n<main>\n{}</main>\n",
+            signup_form(error, email)
+        ),
+    )
+    .into_response()
+}
+
+fn signups_closed() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        message_page(
+            "Signups are closed",
+            "This deployment is not taking new accounts.",
+            "/login",
+            "log in",
+        ),
+    )
+        .into_response()
+}
+
+/// Enough of a check to catch typos. The real test of an address is whether
+/// its owner can log in with it.
+fn plausible_email(email: &str) -> bool {
+    let mut parts = email.split('@');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(local), Some(domain), None) => {
+            !local.is_empty()
+                && domain.len() > 2
+                && domain.contains('.')
+                && !domain.starts_with('.')
+                && !domain.ends_with('.')
+                && email.len() <= 254
+                && !email.chars().any(|c| c.is_whitespace() || c.is_control())
+        }
+        _ => false,
+    }
+}
+
+/// `GET /signup`
+pub async fn signup_page(
+    State(state): State<Arc<AppState>>,
+    MaybeAuth(who): MaybeAuth,
+) -> Response {
+    if who.is_some() {
+        return Redirect::to("/dash").into_response();
+    }
+    if !state.signup_open {
+        return signups_closed();
+    }
+    signup_screen(None, "")
+}
+
+/// `POST /signup` &mdash; make an account, and log straight into it.
+pub async fn signup_submit(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<SignupForm>,
+) -> Response {
+    if !state.signup_open {
+        return signups_closed();
+    }
+    let email = form.email.trim().to_lowercase();
+    let refuse = |message: &str| {
+        (
+            StatusCode::BAD_REQUEST,
+            signup_screen(Some(message), &email),
+        )
+            .into_response()
+    };
+
+    if !plausible_email(&email) {
+        return refuse("That does not look like an email address.");
+    }
+    let length = form.password.chars().count();
+    if length < MIN_PASSWORD {
+        return refuse("That password is too short.");
+    }
+    if length > MAX_PASSWORD {
+        return refuse("That password is too long.");
+    }
+    if form.password != form.password2 {
+        return refuse("The two passwords are not the same.");
+    }
+    match db::user_by_email(&state.db, &email).await {
+        Ok(Some(_)) => return refuse("There is already an account with that email."),
+        Ok(None) => (),
+        Err(_) => return oops(),
+    }
+
+    let hash = match auth::hash_password(form.password).await {
+        Some(hash) => hash,
+        None => return oops(),
+    };
+    match db::create_user(&state.db, &email, &hash).await {
+        Ok(Some(user_id)) => start_session(&state, user_id).await,
+        Ok(None) => refuse("There is already an account with that email."),
+        Err(_) => oops(),
+    }
+}
+
+/// `POST /logout` &mdash; ends this browser's session for good, but leaves any
+/// access key you made by hand alone.
+pub async fn logout(
+    State(state): State<Arc<AppState>>,
+    auth::PresentedKey(key): auth::PresentedKey,
+) -> Response {
+    if let Some(key) = key {
+        let _ = db::revoke_key(&state.db, &key).await;
+    }
     (
         [(SET_COOKIE, auth::logout_cookie(state.cookie_secure))],
         Redirect::to("/"),
@@ -415,11 +649,13 @@ pub async fn update_item(
         &state.db,
         who.user_id,
         id,
-        Some(name),
-        Some(form.tags.trim().to_string()),
-        Some(form.desc.trim().to_string()),
-        Some(form.loc.trim().to_string()),
-        Some(checked(&form.searching)),
+        ModifyItemRequest {
+            name: Some(name),
+            tags: Some(form.tags.trim().to_string()),
+            desc: Some(form.desc.trim().to_string()),
+            loc: Some(form.loc.trim().to_string()),
+            searching: Some(checked(&form.searching)),
+        },
     )
     .await;
     match updated {
@@ -440,11 +676,10 @@ pub async fn set_searching(
         &state.db,
         who.user_id,
         id,
-        None,
-        None,
-        None,
-        None,
-        Some(checked(&form.searching)),
+        ModifyItemRequest {
+            searching: Some(checked(&form.searching)),
+            ..Default::default()
+        },
     )
     .await;
     match updated {

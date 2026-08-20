@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO accesskeys (user_id, keytext, expiry, session) VALUES ($1, $2, $3, true)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7a1cc28e1947448c324a01c8e31c67ccccd769998efde05ed54318ac9291ac17"
+}

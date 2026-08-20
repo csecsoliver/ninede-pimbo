@@ -31,7 +31,7 @@ pub struct CreateItemRequest {
 
 /// Body of `PATCH /api/items/{id}`, and of the `POST /items/{id}` html form.
 /// Every field is optional: absent means "leave as it is".
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 pub struct ModifyItemRequest {
     pub name: Option<String>,
     pub tags: Option<String>,
